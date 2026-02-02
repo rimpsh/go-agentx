@@ -142,7 +142,7 @@ func (v *Variable) UnmarshalBinary(data []byte) error {
 		if err := oid.UnmarshalBinary(data[offset:]); err != nil {
 			return err
 		}
-		v.Value = oid.GetIdentifier()
+		v.Value = oid.String()
 	case VariableTypeIPAddress:
 		octetString := &OctetString{}
 		if err := octetString.UnmarshalBinary(data[offset:]); err != nil {

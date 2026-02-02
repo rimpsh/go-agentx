@@ -15,6 +15,12 @@ import (
 	"github.com/rimpsh/go-agentx/value"
 )
 
+// snmpTrapOID is the OID for the SNMP trap OID variable.
+var snmpTrapOID = pdu.ObjectIdentifier{
+	Prefix:         6,
+	Subidentifiers: []uint32{3, 1, 1, 4, 1, 0},
+}
+
 // Session defines an agentx session.
 type Session struct {
 	client    *Client
@@ -93,6 +99,29 @@ func (s *Session) Unregister(priority byte, baseOID value.OID) error {
 	}
 	s.registerRequestPacket = nil
 	return nil
+}
+
+// Notify sends a notification to the master agent.
+func (s *Session) Notify(oid string, variables pdu.Variables) error {
+	requestPacket := &pdu.Notify{}
+
+	// set the snmp trap oid as the first variable
+	notifyVariables := pdu.Variables{
+		pdu.Variable{
+			Type:  pdu.VariableTypeObjectIdentifier,
+			Name:  snmpTrapOID,
+			Value: oid,
+		},
+	}
+
+	variables = append(notifyVariables, variables...)
+
+	requestPacket.Variables = variables
+
+	request := &pdu.HeaderPacket{Header: &pdu.Header{Type: pdu.TypeNotify}, Packet: requestPacket}
+
+	response := s.request(request)
+	return checkError(response)
 }
 
 // Close tears down the session with the master agent.
