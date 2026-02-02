@@ -5,7 +5,7 @@
 package pdu
 
 import (
-	"github.com/posteo/go-agentx/marshaler"
+	"github.com/rimpsh/go-agentx/marshaler"
 )
 
 // Open defines a pdu open packet.

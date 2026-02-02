@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/posteo/go-agentx"
-	"github.com/posteo/go-agentx/pdu"
-	"github.com/posteo/go-agentx/value"
+	"github.com/rimpsh/go-agentx"
+	"github.com/rimpsh/go-agentx/pdu"
+	"github.com/rimpsh/go-agentx/value"
 )
 
 func TestListHandler(t *testing.T) {
@@ -51,7 +51,6 @@ func TestListHandler(t *testing.T) {
 		assert.Equal(t,
 			".1.3.6.1.4.1.45995.3.1 = STRING: \"test\"",
 			SNMPGetNext(t, "1.3.6.1.4.1.45995.3"))
-
 	})
 
 	t.Run("GetBulk", func(t *testing.T) {

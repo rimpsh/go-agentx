@@ -4,7 +4,7 @@
 
 package pdu
 
-import "github.com/posteo/go-agentx/value"
+import "github.com/rimpsh/go-agentx/value"
 
 // Get defines the pdu get packet.
 type Get struct {
