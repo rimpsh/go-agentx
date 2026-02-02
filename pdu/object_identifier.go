@@ -40,7 +40,7 @@ func (o *ObjectIdentifier) SetIdentifier(oid value.OID) {
 	o.Subidentifiers = make([]uint32, 0)
 
 	if len(oid) > 4 && oid[0] == 1 && oid[1] == 3 && oid[2] == 6 && oid[3] == 1 {
-		o.Subidentifiers = append(o.Subidentifiers, uint32(1), uint32(3), uint32(6), uint32(1), uint32(oid[4]))
+		o.Prefix = uint8(oid[4])
 		oid = oid[5:]
 	}
 
