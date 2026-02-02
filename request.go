@@ -4,11 +4,16 @@
 
 package agentx
 
-import "github.com/rimpsh/go-agentx/pdu"
+import (
+	"context"
+
+	"github.com/rimpsh/go-agentx/pdu"
+)
 
 type request struct {
 	headerPacket *pdu.HeaderPacket
 	responseChan chan *pdu.HeaderPacket
+	ctx          context.Context
 }
 
 func (r *request) String() string {

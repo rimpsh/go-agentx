@@ -6,11 +6,13 @@ package agentx
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rimpsh/go-agentx/pdu"
@@ -179,6 +181,7 @@ func (c *Client) runReceiver() chan *pdu.HeaderPacket {
 func (c *Client) runDispatcher(tx, rx chan *pdu.HeaderPacket) {
 	go func() {
 		currentPacketID := uint32(0)
+		responseChansMutex := sync.Mutex{}
 		responseChans := make(map[uint32]chan *pdu.HeaderPacket)
 
 		for {
@@ -186,7 +189,18 @@ func (c *Client) runDispatcher(tx, rx chan *pdu.HeaderPacket) {
 			case request := <-c.requestChan:
 				// log.Printf(">: %v", request)
 				request.headerPacket.Header.PacketID = currentPacketID
+
+				responseChansMutex.Lock()
 				responseChans[currentPacketID] = request.responseChan
+				responseChansMutex.Unlock()
+
+				go func() {
+					<-request.ctx.Done()
+					responseChansMutex.Lock()
+					delete(responseChans, request.headerPacket.Header.PacketID)
+					responseChansMutex.Unlock()
+				}()
+
 				currentPacketID++
 
 				tx <- request.headerPacket
@@ -196,7 +210,10 @@ func (c *Client) runDispatcher(tx, rx chan *pdu.HeaderPacket) {
 				responseChan, ok := responseChans[packetID]
 				if ok {
 					responseChan <- headerPacket
+
+					responseChansMutex.Lock()
 					delete(responseChans, packetID)
+					responseChansMutex.Unlock()
 				} else {
 					session, ok := c.sessions[headerPacket.Header.SessionID]
 					if ok {
@@ -210,13 +227,28 @@ func (c *Client) runDispatcher(tx, rx chan *pdu.HeaderPacket) {
 	}()
 }
 
-func (c *Client) request(hp *pdu.HeaderPacket) *pdu.HeaderPacket {
-	responseChan := make(chan *pdu.HeaderPacket)
+func (c *Client) request(hp *pdu.HeaderPacket) (*pdu.HeaderPacket, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.options.timeout)
+	defer cancel()
+
+	responseChan := make(chan *pdu.HeaderPacket, 1)
+
 	request := &request{
 		headerPacket: hp,
 		responseChan: responseChan,
+		ctx:          ctx,
 	}
-	c.requestChan <- request
-	headerPacket := <-responseChan
-	return headerPacket
+
+	select {
+	case c.requestChan <- request:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	select {
+	case headerPacket := <-responseChan:
+		return headerPacket, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

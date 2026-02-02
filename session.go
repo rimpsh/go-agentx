@@ -45,7 +45,11 @@ func openSession(client *Client, nameOID value.OID, name string, handler Handler
 	requestPacket.Description.Text = name
 	request := &pdu.HeaderPacket{Header: &pdu.Header{Type: pdu.TypeOpen}, Packet: requestPacket}
 
-	response := s.request(request)
+	response, err := s.request(request)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := checkError(response); err != nil {
 		return nil, err
 	}
@@ -73,7 +77,11 @@ func (s *Session) Register(priority byte, baseOID value.OID) error {
 	requestPacket.Subtree.SetIdentifier(baseOID)
 	request := &pdu.HeaderPacket{Header: &pdu.Header{Type: pdu.TypeRegister}, Packet: requestPacket}
 
-	response := s.request(request)
+	response, err := s.request(request)
+	if err != nil {
+		return err
+	}
+
 	if err := checkError(response); err != nil {
 		return err
 	}
@@ -93,7 +101,11 @@ func (s *Session) Unregister(priority byte, baseOID value.OID) error {
 	requestPacket.Subtree.SetIdentifier(baseOID)
 	request := &pdu.HeaderPacket{Header: &pdu.Header{}, Packet: requestPacket}
 
-	response := s.request(request)
+	response, err := s.request(request)
+	if err != nil {
+		return err
+	}
+
 	if err := checkError(response); err != nil {
 		return err
 	}
@@ -120,7 +132,10 @@ func (s *Session) Notify(oid string, variables pdu.Variables) error {
 
 	request := &pdu.HeaderPacket{Header: &pdu.Header{Type: pdu.TypeNotify}, Packet: requestPacket}
 
-	response := s.request(request)
+	response, err := s.request(request)
+	if err != nil {
+		return err
+	}
 	return checkError(response)
 }
 
@@ -128,7 +143,11 @@ func (s *Session) Notify(oid string, variables pdu.Variables) error {
 func (s *Session) Close() error {
 	requestPacket := &pdu.Close{Reason: pdu.ReasonShutdown}
 
-	response := s.request(&pdu.HeaderPacket{Header: &pdu.Header{}, Packet: requestPacket})
+	response, err := s.request(&pdu.HeaderPacket{Header: &pdu.Header{}, Packet: requestPacket})
+	if err != nil {
+		return err
+	}
+
 	if err := checkError(response); err != nil {
 		return err
 	}
@@ -137,7 +156,11 @@ func (s *Session) Close() error {
 
 func (s *Session) reopen() error {
 	if s.openRequestPacket != nil {
-		response := s.request(s.openRequestPacket)
+		response, err := s.request(s.openRequestPacket)
+		if err != nil {
+			return err
+		}
+
 		if err := checkError(response); err != nil {
 			return err
 		}
@@ -145,7 +168,11 @@ func (s *Session) reopen() error {
 	}
 
 	if s.registerRequestPacket != nil {
-		response := s.request(s.registerRequestPacket)
+		response, err := s.request(s.registerRequestPacket)
+		if err != nil {
+			return err
+		}
+
 		if err := checkError(response); err != nil {
 			return err
 		}
@@ -154,7 +181,7 @@ func (s *Session) reopen() error {
 	return nil
 }
 
-func (s *Session) request(hp *pdu.HeaderPacket) *pdu.HeaderPacket {
+func (s *Session) request(hp *pdu.HeaderPacket) (*pdu.HeaderPacket, error) {
 	hp.Header.SessionID = s.sessionID
 	return s.client.request(hp)
 }
