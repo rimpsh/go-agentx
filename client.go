@@ -25,9 +25,17 @@ type Client struct {
 	network     string
 	address     string
 	options     dialOptions
+	connMu      sync.RWMutex
 	conn        net.Conn
 	requestChan chan *request
+	sessionsMu  sync.RWMutex
 	sessions    map[uint32]*Session
+
+	// This is used to signal receiver, transmitter and dispatcher goroutines to
+	// stop.
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // Dial connects to the provided agentX endpoint.
@@ -41,6 +49,9 @@ func Dial(network, address string, opts ...DialOption) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s %s: %w", network, address, err)
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
 	c := &Client{
 		logger:      options.logger,
 		network:     network,
@@ -49,6 +60,8 @@ func Dial(network, address string, opts ...DialOption) (*Client, error) {
 		conn:        conn,
 		requestChan: make(chan *request),
 		sessions:    make(map[uint32]*Session),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 
 	if c.logger == nil {
@@ -64,10 +77,29 @@ func Dial(network, address string, opts ...DialOption) (*Client, error) {
 
 // Close tears down the client.
 func (c *Client) Close() error {
+	// Signal client goroutines to stop
+	c.cancel()
+
+	done := make(chan struct{})
+	go func() {
+		// Wait for goroutines to stop
+		c.wg.Wait()
+		close(done)
+	}()
+
+	// Close the connection (this will cause receiver to exit)
 	if err := c.conn.Close(); err != nil {
-		return fmt.Errorf("close connection: %w", err)
+		c.logger.Debug("error closing connection", slog.Any("err", err))
 	}
-	return nil
+
+	select {
+	case <-done:
+		c.logger.Debug("all goroutines stopped gracefully")
+		return nil
+	case <-time.After(5 * time.Second):
+		c.logger.Warn("timeout waiting for goroutines to stop")
+		return fmt.Errorf("timeout waiting for goroutines to stop")
+	}
 }
 
 // Session sets up a new session.
@@ -76,6 +108,10 @@ func (c *Client) Session(nameOID value.OID, name string, handler Handler) (*Sess
 	if err != nil {
 		return nil, fmt.Errorf("open session: %w", err)
 	}
+
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
+
 	c.sessions[s.ID()] = s
 	return s, nil
 }
@@ -83,24 +119,39 @@ func (c *Client) Session(nameOID value.OID, name string, handler Handler) (*Sess
 func (c *Client) runTransmitter() chan *pdu.HeaderPacket {
 	tx := make(chan *pdu.HeaderPacket)
 
-	go func() {
-		for headerPacket := range tx {
-			headerPacketBytes, err := headerPacket.MarshalBinary()
-			if err != nil {
-				c.logger.Debug("header packet marshal error", slog.Any("err", err))
-				continue
-			}
-			writer := bufio.NewWriter(c.conn)
-			if _, err := writer.Write(headerPacketBytes); err != nil {
-				c.logger.Debug("header packet write error", slog.Any("err", err))
-				continue
-			}
-			if err := writer.Flush(); err != nil {
-				c.logger.Debug("header packet flush error", slog.Any("err", err))
-				continue
+	c.wg.Go(func() {
+		defer c.logger.Debug("transmitter goroutine stopped")
+
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case headerPacket, ok := <-tx:
+				if !ok {
+					return
+				}
+
+				headerPacketBytes, err := headerPacket.MarshalBinary()
+				if err != nil {
+					c.logger.Debug("header packet marshal error", slog.Any("err", err))
+					continue
+				}
+				c.connMu.RLock()
+				currentConn := c.conn
+				c.connMu.RUnlock()
+
+				writer := bufio.NewWriter(currentConn)
+				if _, err := writer.Write(headerPacketBytes); err != nil {
+					c.logger.Debug("header packet write error", slog.Any("err", err))
+					continue
+				}
+				if err := writer.Flush(); err != nil {
+					c.logger.Debug("header packet flush error", slog.Any("err", err))
+					continue
+				}
 			}
 		}
-	}()
+	})
 
 	return tx
 }
@@ -108,10 +159,17 @@ func (c *Client) runTransmitter() chan *pdu.HeaderPacket {
 func (c *Client) runReceiver() chan *pdu.HeaderPacket {
 	rx := make(chan *pdu.HeaderPacket)
 
-	go func() {
+	c.wg.Go(func() {
+		defer close(rx)
+		defer c.logger.Debug("receiver goroutine stopped")
+
 	mainLoop:
 		for {
-			reader := bufio.NewReader(c.conn)
+			c.connMu.RLock()
+			currentConn := c.conn
+			c.connMu.RUnlock()
+
+			reader := bufio.NewReader(currentConn)
 			headerBytes := make([]byte, pdu.HeaderSize)
 			if _, err := reader.Read(headerBytes); err != nil {
 				if opErr, ok := err.(*net.OpError); ok && strings.HasSuffix(opErr.Error(), "use of closed network connection") {
@@ -121,33 +179,54 @@ func (c *Client) runReceiver() chan *pdu.HeaderPacket {
 					c.logger.Info("lost connection", slog.Duration("re-connect-in", c.options.reconnectInterval))
 				reopenLoop:
 					for {
-						time.Sleep(c.options.reconnectInterval)
+						select {
+						case <-c.ctx.Done():
+							return
+						case <-time.After(c.options.reconnectInterval):
+						}
+
 						conn, err := net.Dial(c.network, c.address)
 						if err != nil {
 							c.logger.Error("re-connect error", slog.Any("err", err))
 							continue reopenLoop
 						}
+						c.connMu.Lock()
 						c.conn = conn
+						c.connMu.Unlock()
 						go func() {
+							c.sessionsMu.Lock()
+							sessionsReopen := make([]*Session, 0, len(c.sessions))
 							for _, session := range c.sessions {
-								delete(c.sessions, session.ID())
+								sessionsReopen = append(sessionsReopen, session)
+							}
+							// clear sessions map
+							c.sessions = make(map[uint32]*Session)
+							c.sessionsMu.Unlock()
+
+							// re-open sessions
+							for _, session := range sessionsReopen {
 								if err := session.reopen(); err != nil {
 									c.logger.Error("re-open error", slog.Any("err", err))
-									return
+									continue
 								}
+
+								c.sessionsMu.Lock()
 								c.sessions[session.ID()] = session
+								c.sessionsMu.Unlock()
 							}
 							c.logger.Info("re-connect successful")
 						}()
 						continue mainLoop
 					}
 				}
-				panic(err)
+				c.logger.Error("unexpected error reading header", slog.Any("err", err))
+				return
 			}
 
 			header := &pdu.Header{}
 			if err := header.UnmarshalBinary(headerBytes); err != nil {
-				panic(err)
+				c.logger.Error("error unmarshaling header", slog.Any("err", err))
+				return
 			}
 
 			var packet pdu.Packet
@@ -160,75 +239,119 @@ func (c *Client) runReceiver() chan *pdu.HeaderPacket {
 				packet = &pdu.GetNext{}
 			default:
 				c.logger.Error("unable to handle packet", slog.String("packet-type", header.Type.String()))
+				continue
 			}
 
 			packetBytes := make([]byte, header.PayloadLength)
 			if _, err := reader.Read(packetBytes); err != nil {
-				panic(err)
+				c.logger.Error("error reading packet bytes", slog.Any("err", err))
+				return
 			}
 
 			if err := packet.UnmarshalBinary(packetBytes); err != nil {
-				panic(err)
+				c.logger.Error("error unmarshaling packet", slog.Any("err", err))
+				return
 			}
 
-			rx <- &pdu.HeaderPacket{Header: header, Packet: packet}
+			select {
+			case <-c.ctx.Done():
+				return
+			case rx <- &pdu.HeaderPacket{Header: header, Packet: packet}:
+			}
 		}
-	}()
+	})
 
 	return rx
 }
 
 func (c *Client) runDispatcher(tx, rx chan *pdu.HeaderPacket) {
-	go func() {
+	c.wg.Go(func() {
+		defer close(tx)
+		defer c.logger.Debug("dispatcher goroutine stopped")
+
 		currentPacketID := uint32(0)
-		responseChansMutex := sync.Mutex{}
+		responseChansMu := sync.Mutex{}
 		responseChans := make(map[uint32]chan *pdu.HeaderPacket)
 
 		for {
 			select {
+			case <-c.ctx.Done():
+				// Cleanup: close all pending response channels
+				responseChansMu.Lock()
+				for _, ch := range responseChans {
+					close(ch)
+				}
+				responseChansMu.Unlock()
+				return
+
 			case request := <-c.requestChan:
 				// log.Printf(">: %v", request)
 				request.headerPacket.Header.PacketID = currentPacketID
 
-				responseChansMutex.Lock()
+				responseChansMu.Lock()
 				responseChans[currentPacketID] = request.responseChan
-				responseChansMutex.Unlock()
+				responseChansMu.Unlock()
 
+				packetID := currentPacketID
 				go func() {
 					<-request.ctx.Done()
-					responseChansMutex.Lock()
-					delete(responseChans, request.headerPacket.Header.PacketID)
-					responseChansMutex.Unlock()
+					responseChansMu.Lock()
+					defer responseChansMu.Unlock()
+					delete(responseChans, packetID)
 				}()
 
 				currentPacketID++
 
-				tx <- request.headerPacket
-			case headerPacket := <-rx:
+				select {
+				case <-c.ctx.Done():
+					return
+				case tx <- request.headerPacket:
+				}
+
+			case headerPacket, ok := <-rx:
+				if !ok {
+					return
+				}
+
 				// log.Printf("<: %v", headerPacket)
 				packetID := headerPacket.Header.PacketID
-				responseChan, ok := responseChans[packetID]
-				if ok {
-					responseChan <- headerPacket
 
-					responseChansMutex.Lock()
-					delete(responseChans, packetID)
-					responseChansMutex.Unlock()
+				responseChansMu.Lock()
+				responseChan, ok := responseChans[packetID]
+				delete(responseChans, packetID)
+				responseChansMu.Unlock()
+
+				if ok {
+					select {
+					case responseChan <- headerPacket:
+					case <-c.ctx.Done():
+						return
+					}
 				} else {
+					c.sessionsMu.RLock()
 					session, ok := c.sessions[headerPacket.Header.SessionID]
+					c.sessionsMu.RUnlock()
 					if ok {
-						tx <- session.handle(headerPacket)
+						select {
+						case <-c.ctx.Done():
+							return
+						case tx <- session.handle(headerPacket):
+						}
 					} else {
 						c.logger.Error("got packet without session", slog.String("packet-type", headerPacket.Header.Type.String()))
 					}
 				}
 			}
 		}
-	}()
+	})
 }
 
 func (c *Client) request(hp *pdu.HeaderPacket) (*pdu.HeaderPacket, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.options.timeout)
+	if c.ctx.Err() != nil {
+		return nil, fmt.Errorf("client is closed")
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, c.options.timeout)
 	defer cancel()
 
 	responseChan := make(chan *pdu.HeaderPacket, 1)
@@ -246,7 +369,10 @@ func (c *Client) request(hp *pdu.HeaderPacket) (*pdu.HeaderPacket, error) {
 	}
 
 	select {
-	case headerPacket := <-responseChan:
+	case headerPacket, ok := <-responseChan:
+		if !ok {
+			return nil, fmt.Errorf("response channel closed")
+		}
 		return headerPacket, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
