@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/rimpsh/go-agentx/pdu"
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx/pdu"
+	"github.com/baumal/go-agentx/value"
 )
 
 // snmpTrapOID is the OID for the SNMP trap OID variable.

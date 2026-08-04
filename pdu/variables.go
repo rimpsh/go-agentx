@@ -7,7 +7,7 @@ package pdu
 import (
 	"strings"
 
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx/value"
 )
 
 // Variables defines a list of variable bindings.

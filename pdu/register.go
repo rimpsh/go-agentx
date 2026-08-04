@@ -5,7 +5,7 @@
 package pdu
 
 import (
-	"github.com/rimpsh/go-agentx/marshaler"
+	"github.com/baumal/go-agentx/marshaler"
 )
 
 // Register defines the pdu register packet.

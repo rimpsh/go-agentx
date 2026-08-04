@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/rimpsh/go-agentx"
+	"github.com/baumal/go-agentx"
 )
 
 type environment struct {

@@ -11,7 +11,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx/value"
 )
 
 // Variable defines the pdu varbind packet.

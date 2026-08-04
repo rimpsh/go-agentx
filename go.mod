@@ -1,4 +1,4 @@
-module github.com/rimpsh/go-agentx
+module github.com/baumal/go-agentx
 
 go 1.25
 

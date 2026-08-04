@@ -7,8 +7,8 @@ package agentx
 import (
 	"context"
 
-	"github.com/rimpsh/go-agentx/pdu"
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx/pdu"
+	"github.com/baumal/go-agentx/value"
 )
 
 // ListHandler is a helper that takes a list of oids and implements

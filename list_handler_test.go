@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/rimpsh/go-agentx"
-	"github.com/rimpsh/go-agentx/pdu"
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx"
+	"github.com/baumal/go-agentx/pdu"
+	"github.com/baumal/go-agentx/value"
 )
 
 func TestListHandler(t *testing.T) {

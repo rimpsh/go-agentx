@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rimpsh/go-agentx/pdu"
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx/pdu"
+	"github.com/baumal/go-agentx/value"
 )
 
 // Client defines an agentx client.

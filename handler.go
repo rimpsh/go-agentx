@@ -7,8 +7,8 @@ package agentx
 import (
 	"context"
 
-	"github.com/rimpsh/go-agentx/pdu"
-	"github.com/rimpsh/go-agentx/value"
+	"github.com/baumal/go-agentx/pdu"
+	"github.com/baumal/go-agentx/value"
 )
 
 // Handler defines an interface for a handler of events that

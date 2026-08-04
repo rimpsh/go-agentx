@@ -7,7 +7,7 @@ package agentx
 import (
 	"context"
 
-	"github.com/rimpsh/go-agentx/pdu"
+	"github.com/baumal/go-agentx/pdu"
 )
 
 type request struct {
